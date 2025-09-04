@@ -1,5 +1,7 @@
 #include "ros_interface.h"
 #include <chrono>
+#include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -39,23 +41,31 @@ bool RosInterface::Initialize() {
   auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
 
   joint_cmd_sub_ = node_->create_subscription<interface_protocol::msg::JointCommand>(
-      config_loader_->GetJointCommandTopic(), qos, std::bind(&RosInterface::JointCommandCallback, this, _1));
+    config_loader_->GetJointCommandTopic(), qos, std::bind(&RosInterface::JointCommandCallback, this, _1));
+  body_vel_sub_ = node_->create_subscription<interface_protocol::msg::BodyVelCmd>(
+    "/motion/body_vel_cmd", qos, std::bind(&RosInterface::BodyVelCmdCallback, this, _1));
 
   // Get number of joints from config loader
   num_total_joints_ = config_loader_->GetNumTotalJoints();
 
-  // Initialize commanded values with zeros
+  // Initialize commanded values with a default stand pose (set later after first state)
   joint_command_.position.resize(num_total_joints_, 0.0);
   joint_command_.velocity.resize(num_total_joints_, 0.0);
   joint_command_.torque.resize(num_total_joints_, 0.0);
   joint_command_.feed_forward_torque.resize(num_total_joints_, 0.0);
-  joint_command_.stiffness.resize(num_total_joints_, 0.0);
-  joint_command_.damping.resize(num_total_joints_, 0.0);
+  joint_command_.stiffness.resize(num_total_joints_, 300.0);
+  joint_command_.damping.resize(num_total_joints_, 5.0);
 
-  // Create timer for publishing motion state every 1 second
+  // Create timers
   motion_state_timer_ = node_->create_wall_timer(
-      std::chrono::seconds(1),
-      std::bind(&RosInterface::MotionStateTimerCallback, this));
+    std::chrono::seconds(1), std::bind(&RosInterface::MotionStateTimerCallback, this));
+  gait_timer_ = node_->create_wall_timer(
+    std::chrono::milliseconds(10),  // 100 Hz gait update
+    std::bind(&RosInterface::GaitTimerCallback, this));
+
+  // Initialize time stamps to consistent clock type to avoid subtraction errors
+  last_joint_cmd_time_ = node_->now();
+  body_vel_state_.stamp = node_->now();
 
   RCLCPP_INFO(node_->get_logger(), "MuJoCo ROS interface initialized successfully");
   return true;
@@ -91,6 +101,16 @@ void RosInterface::JointCommandCallback(const interface_protocol::msg::JointComm
   if (joint_command_.damping.size() > num_total_joints_) {
     joint_command_.damping.resize(num_total_joints_);
   }
+  received_explicit_joint_cmd_ = true;
+  last_joint_cmd_time_ = node_->now();
+}
+
+void RosInterface::BodyVelCmdCallback(const interface_protocol::msg::BodyVelCmd::SharedPtr msg) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  body_vel_state_.vx = msg->linear_velocity.size() > 0 ? msg->linear_velocity[0] : 0.0;
+  body_vel_state_.vy = msg->linear_velocity.size() > 1 ? msg->linear_velocity[1] : 0.0;
+  body_vel_state_.yaw = msg->yaw_velocity;
+  body_vel_state_.stamp = node_->now();
 }
 
 void RosInterface::UpdateSimState(const mjModel* m, mjData* d) {
@@ -171,6 +191,51 @@ void RosInterface::MotionStateTimerCallback() {
   
   // Publish the message
   motion_state_pub_->publish(std::move(motion_state_msg));
+}
+
+void RosInterface::InitializeDefaultStandPose() {
+  if (!data_ || !model_ || num_total_joints_ == 0) return;
+  // Simple heuristic: freeze current pose as target with PD gains already set.
+  if (is_floating_base_) return;  // skip for floating base special handling
+  for (int i = 0; i < num_total_joints_ && i < model_->nq; ++i) {
+    joint_command_.position[i] = data_->qpos[i];
+    joint_command_.velocity[i] = 0.0;
+  }
+}
+
+void RosInterface::ApplyStandPoseIfIdle() {
+  // If no explicit joint command in last 0.5s, hold stand pose
+  if (!last_joint_cmd_time_.nanoseconds()) {
+    last_joint_cmd_time_ = node_->now();
+    return;
+  }
+  if ((node_->now() - last_joint_cmd_time_).seconds() > 0.5) {
+    // velocities stay zero, stiffness/damping already set
+  }
+}
+
+void RosInterface::GaitTimerCallback() {
+  std::lock_guard<std::mutex> lock(mtx_);
+  // Initialize stand pose once when we have model/data
+  static bool initialized_stand = false;
+  if (!initialized_stand && model_ && data_) {
+    InitializeDefaultStandPose();
+    initialized_stand = true;
+  }
+  ApplyStandPoseIfIdle();
+
+  // Primitive gait stub (does not yet move legs realistically):
+  // If body velocity command present (recent <0.2s), modulate a small sinus in a few leg joints.
+  if (body_vel_state_.stamp.nanoseconds() != 0 &&
+      (node_->now() - body_vel_state_.stamp).seconds() < 0.2 && num_total_joints_ >= 12) {
+    gait_phase_ += 0.01;  // incremental phase
+    double step_amp = 0.1 * std::clamp(body_vel_state_.vx / 0.5, -1.0, 1.0);
+    // Assume first 6 joints = one leg group, next 6 = second group (based on joint_test.yaml grouping)
+    constexpr double kPi = 3.141592653589793;
+    for (int i = 0; i < 6 && i < num_total_joints_; ++i) {
+      joint_command_.position[i] += step_amp * std::sin(gait_phase_ + (i < 3 ? 0.0 : kPi));
+    }
+  }
 }
 
 }  // namespace mujoco

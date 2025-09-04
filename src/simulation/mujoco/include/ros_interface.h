@@ -9,6 +9,7 @@
 
 #include "interface_protocol/msg/imu_info.hpp"
 #include "interface_protocol/msg/joint_command.hpp"
+#include "interface_protocol/msg/body_vel_cmd.hpp"
 #include "interface_protocol/msg/joint_state.hpp"
 #include "interface_protocol/msg/motion_state.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -34,6 +35,8 @@ class RosInterface {
 
   // Callback for joint command messages
   void JointCommandCallback(const interface_protocol::msg::JointCommand::SharedPtr msg);
+  // Callback for high-level body velocity command
+  void BodyVelCmdCallback(const interface_protocol::msg::BodyVelCmd::SharedPtr msg);
 
   // Update the simulation state to publish to ROS
   void UpdateSimState(const mjModel* m, mjData* d);
@@ -58,6 +61,7 @@ class RosInterface {
 
   // Subscribers
   rclcpp::Subscription<interface_protocol::msg::JointCommand>::SharedPtr joint_cmd_sub_;
+  rclcpp::Subscription<interface_protocol::msg::BodyVelCmd>::SharedPtr body_vel_sub_;
 
   // Config loader
   std::shared_ptr<ConfigLoader> config_loader_;
@@ -67,22 +71,37 @@ class RosInterface {
 
   // Current joint command
   interface_protocol::msg::JointCommand joint_command_;
+  // High-level body velocity state
+  struct BodyVelState {
+    double vx{0.0};
+    double vy{0.0};
+    double yaw{0.0};
+    rclcpp::Time stamp{};
+  } body_vel_state_;
 
   // MuJoCo model and data
   mjModel* model_;
   mjData* data_;
 
-  // Timer for publishing motion state
+  // Timers
   rclcpp::TimerBase::SharedPtr motion_state_timer_;
+  rclcpp::TimerBase::SharedPtr gait_timer_;
   
   // Motion state timer callback
   void MotionStateTimerCallback();
+  // Periodic gait synthesis based on high-level body velocity
+  void GaitTimerCallback();
+  void InitializeDefaultStandPose();
+  void ApplyStandPoseIfIdle();
 
   // Mutex for thread safety
   std::mutex mtx_;
 
   // Flag indicating if we have a floating base robot
   bool is_floating_base_;
+  bool received_explicit_joint_cmd_{false};
+  rclcpp::Time last_joint_cmd_time_;
+  double gait_phase_{0.0};
 };
 
 }  // namespace mujoco
