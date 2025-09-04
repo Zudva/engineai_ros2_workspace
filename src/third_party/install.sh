@@ -1,38 +1,31 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Script to extract engineai_robotics_third_party_libs.tar.gz to /opt directory
+echo "[third_party/install] Starting installation of third-party libs" >&2
 
-# Get the directory where the script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
-# Path to the compressed file (relative to script directory)
 TAR_FILE="${SCRIPT_DIR}/engineai_robotics_third_party_libs.tar.gz"
+TARGET_DIR="/opt"
+DEST_DIR="/opt/engineai_robotics_third_party"
 
-# Check if the file exists
-if [ ! -f "$TAR_FILE" ]; then
-    echo "Error: File $TAR_FILE not found in current directory"
+if [[ ! -f "$TAR_FILE" ]]; then
+    echo "Error: Archive not found: $TAR_FILE" >&2
     exit 1
 fi
 
-# Check if script is running with sudo privileges
-if [ "$(id -u)" -ne 0 ]; then
-    echo "This script requires sudo privileges to extract to /opt"
-    echo "Executing with sudo..."
-    sudo "$0" "$@"
-    exit $?
+if [[ $(id -u) -ne 0 ]]; then
+    echo "Re-executing with sudo..." >&2
+    exec sudo -E bash "$0" "$@"
 fi
 
-echo "Extracting $TAR_FILE to /opt..."
+echo "Extracting to $TARGET_DIR ..." >&2
+tar -xzf "$TAR_FILE" -C "$TARGET_DIR"
 
-# Extract the tar.gz file to /opt
-tar -xzf "$TAR_FILE" -C /opt
-
-if [ $? -eq 0 ]; then
-    echo "Extraction completed successfully"
-    echo "Third-party libraries have been installed to /opt"
-else
-    echo "Error: Failed to extract the file"
-    exit 1
+if [[ ! -d "$DEST_DIR/lib" ]]; then
+    echo "Error: Destination $DEST_DIR/lib not found after extraction" >&2
+    exit 2
 fi
 
+echo "Done. Libraries installed under $DEST_DIR" >&2
+echo "You may add to ~/.bashrc: export ENGINEAI_ROBOTICS_THIRD_PARTY=$DEST_DIR" >&2
 exit 0
