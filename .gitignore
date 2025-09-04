@@ -7,3 +7,8 @@
 /rosbag2_*/
 __pycache__/
 *.pyc
+
+offline_bundle/
+scripts/build/
+scripts/log/
+

@@ -83,6 +83,14 @@ install(TARGETS
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install Python scripts
+install(PROGRAMS
+  scripts/body_velocity_control_example.py
+  scripts/arm_control_example.py
+  scripts/arm_wave_example.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # 安装 launch 文件
 install(DIRECTORY
   launch
@@ -95,3 +103,15 @@ install(DIRECTORY config/
 )
 
 ament_package()
+
+# Create extension-less helper launchers for ros2 run (so user can omit .py)
+# Install duplicate launcher names without .py so 'ros2 run' works
+install(PROGRAMS scripts/body_velocity_control_example.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME body_velocity_control_example)
+install(PROGRAMS scripts/arm_control_example.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME arm_control_example)
+install(PROGRAMS scripts/arm_wave_example.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME arm_wave_example)
