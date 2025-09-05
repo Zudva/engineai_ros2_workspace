@@ -25,6 +25,12 @@ RosInterface::RosInterface(const rclcpp::Node::SharedPtr& node, std::shared_ptr<
 RosInterface::~RosInterface() {}
 
 bool RosInterface::Initialize() {
+  // Declare tunable parameters (can be extended later)
+  if (!node_->has_parameter("base_height")) {
+    node_->declare_parameter<double>("base_height", base_height_);
+  }
+  node_->get_parameter("base_height", base_height_);
+  base_height_ = std::clamp(base_height_, 0.3, 1.5);
   // Create publishers
   joint_state_pub_ =
       node_->create_publisher<interface_protocol::msg::JointState>(config_loader_->GetJointStateTopic(), 10);
@@ -178,8 +184,10 @@ void RosInterface::UpdateSimState(const mjModel* m, mjData* d) {
 }
 
 void RosInterface::SetModelAndData(mjModel* model, mjData* data) {
+  std::lock_guard<std::mutex> lock(mtx_);
   model_ = model;
   data_ = data;
+  neutral_initialized_ = false; // defer initialization to gait timer to avoid recursive callback deadlock
 }
 
 void RosInterface::MotionStateTimerCallback() {
@@ -193,15 +201,41 @@ void RosInterface::MotionStateTimerCallback() {
   motion_state_pub_->publish(std::move(motion_state_msg));
 }
 
-void RosInterface::InitializeDefaultStandPose() {
+void RosInterface::InitializeNeutralStandPose() {
   if (!data_ || !model_ || num_total_joints_ == 0) return;
-  // Simple heuristic: freeze current pose as target with PD gains already set.
-  if (is_floating_base_) return;  // skip for floating base special handling
-  for (int i = 0; i < num_total_joints_ && i < model_->nq; ++i) {
-    joint_command_.position[i] = data_->qpos[i];
+  if (num_total_joints_ < 0) return;
+  // Build neutral pose from joint_test.yaml target positions (concatenated groups)
+  std::vector<double> pose = {0.0,  0.5,  1.57, 0.6,  -0.3, 0.0,  // leg group 1
+                              -0.0, -0.5, -1.57, 0.6, -0.3, 0.0,  // leg group 2
+                              0.0,                                 // torso
+                              0.0,  0.3,  0.0,  -0.4, 0.0,         // left arm
+                              0.0, -0.2,  0.0,  -0.3, 0.0,         // right arm
+                              0.0};                                // head
+  if ((int)pose.size() == num_total_joints_) {
+    neutral_pose_ = pose;
+  } else {
+    neutral_pose_.assign(num_total_joints_, 0.0);
+  }
+  // Floating base: set upright base orientation and height
+  if (model_->nv != model_->nu && model_->nq >= 7 && data_->qpos) {
+    // Ensure index access inside bounds (MuJoCo guarantees nQ >=7 for free joint) but add guard.
+    data_->qpos[0] = 1.0; // qw
+    data_->qpos[1] = 0.0; // qx
+    data_->qpos[2] = 0.0; // qy
+    data_->qpos[3] = 0.0; // qz
+    data_->qpos[4] = 0.0; // x
+    data_->qpos[5] = 0.0; // y
+  data_->qpos[6] = base_height_; // initial guess (may be adjusted below)
+  }
+  // Apply neutral pose to commanded joints
+  for (int i = 0; i < num_total_joints_; ++i) {
+    joint_command_.position[i] = neutral_pose_[i];
     joint_command_.velocity[i] = 0.0;
   }
+
+  // (simplified) no ground alignment logic
 }
+
 
 void RosInterface::ApplyStandPoseIfIdle() {
   // If no explicit joint command in last 0.5s, hold stand pose
@@ -215,25 +249,50 @@ void RosInterface::ApplyStandPoseIfIdle() {
 }
 
 void RosInterface::GaitTimerCallback() {
-  std::lock_guard<std::mutex> lock(mtx_);
-  // Initialize stand pose once when we have model/data
-  static bool initialized_stand = false;
-  if (!initialized_stand && model_ && data_) {
-    InitializeDefaultStandPose();
-    initialized_stand = true;
+  std::unique_lock<std::mutex> lock(mtx_);
+  if (!neutral_initialized_) {
+    if (model_ && data_) {
+      InitializeNeutralStandPose();
+      // store local copies and release lock before mj_forward to avoid recursive lock via control callback
+      auto* m = model_;
+      auto* d = data_;
+      lock.unlock();
+      mj_forward(m, d);
+      lock.lock();
+  neutral_initialized_ = true;
+    } else {
+      return; // wait
+    }
   }
   ApplyStandPoseIfIdle();
 
-  // Primitive gait stub (does not yet move legs realistically):
-  // If body velocity command present (recent <0.2s), modulate a small sinus in a few leg joints.
-  if (body_vel_state_.stamp.nanoseconds() != 0 &&
-      (node_->now() - body_vel_state_.stamp).seconds() < 0.2 && num_total_joints_ >= 12) {
-    gait_phase_ += 0.01;  // incremental phase
-    double step_amp = 0.1 * std::clamp(body_vel_state_.vx / 0.5, -1.0, 1.0);
-    // Assume first 6 joints = one leg group, next 6 = second group (based on joint_test.yaml grouping)
+  // Gait modulation around neutral pose without drift
+  bool have_recent_body_cmd = body_vel_state_.stamp.nanoseconds() != 0 &&
+      (node_->now() - body_vel_state_.stamp).seconds() < 0.2;
+  if (!neutral_pose_.empty() && have_recent_body_cmd && num_total_joints_ >= 12) {
+    double speed_scale = std::clamp(std::abs(body_vel_state_.vx) / 0.5, 0.2, 1.0);
+    gait_phase_ += 0.02 * speed_scale;  // phase increment
+    double step_amp = 0.15 * std::clamp(body_vel_state_.vx / 0.5, -1.0, 1.0);
     constexpr double kPi = 3.141592653589793;
-    for (int i = 0; i < 6 && i < num_total_joints_; ++i) {
-      joint_command_.position[i] += step_amp * std::sin(gait_phase_ + (i < 3 ? 0.0 : kPi));
+    // Use hip pitch joints (indices 2 and 8) as simple example
+    int hip1 = 2;
+    int hip2 = 8;
+    if (hip1 < num_total_joints_) {
+      joint_command_.position[hip1] = neutral_pose_[hip1] + step_amp * std::sin(gait_phase_);
+    }
+    if (hip2 < num_total_joints_) {
+      joint_command_.position[hip2] = neutral_pose_[hip2] + step_amp * std::sin(gait_phase_ + kPi);
+    }
+  } else if (!neutral_pose_.empty()) {
+    // Idle limb animation (e.g., shoulders) to show simulation is responsive
+    gait_phase_ += 0.01;
+    int l_shoulder = 13; // approximate index for first arm joint after torso
+    int r_shoulder = 18; // approximate index for right arm counterpart (depends on model ordering)
+    if (l_shoulder < num_total_joints_) {
+      joint_command_.position[l_shoulder] = neutral_pose_[l_shoulder] + 0.2 * std::sin(gait_phase_);
+    }
+    if (r_shoulder < num_total_joints_) {
+      joint_command_.position[r_shoulder] = neutral_pose_[r_shoulder] + 0.2 * std::sin(gait_phase_ + 3.14159);
     }
   }
 }

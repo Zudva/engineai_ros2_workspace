@@ -23,9 +23,8 @@ def generate_launch_description():
 
     # 根据headless参数创建节点配置
     def launch_setup(context, *args, **kwargs):
-
-        # 准备节点参数
-        args = []
+        # 准备节点参数 (placeholder if later CLI args used)
+        node_args = []
 
         # 定义MuJoCo模拟器节点
         mujoco_node = Node(
@@ -34,9 +33,10 @@ def generate_launch_description():
             name='mujoco_simulator',
             output='screen',
             emulate_tty=True,
-            arguments=args,
+            arguments=node_args,
             parameters=[
                 {'use_sim_time': True},
+                {'base_height': LaunchConfiguration('base_height')},
             ]
         )
 
@@ -47,6 +47,10 @@ def generate_launch_description():
 
     # Return launch description
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'base_height',
+            default_value='0.6',
+            description='Initial floating base height (meters) for spawn'),
         *env_vars,
         mujoco_launch
     ])

@@ -88,6 +88,7 @@ install(PROGRAMS
   scripts/body_velocity_control_example.py
   scripts/arm_control_example.py
   scripts/arm_wave_example.py
+  scripts/idle_animation_example.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -115,3 +116,6 @@ install(PROGRAMS scripts/arm_control_example.py
 install(PROGRAMS scripts/arm_wave_example.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME arm_wave_example)
+install(PROGRAMS scripts/idle_animation_example.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME idle_animation_example)

@@ -91,8 +91,9 @@ class RosInterface {
   void MotionStateTimerCallback();
   // Periodic gait synthesis based on high-level body velocity
   void GaitTimerCallback();
-  void InitializeDefaultStandPose();
+  void InitializeNeutralStandPose();
   void ApplyStandPoseIfIdle();
+  // (simplified) no automatic ground alignment; base height taken directly from parameter
 
   // Mutex for thread safety
   std::mutex mtx_;
@@ -102,6 +103,11 @@ class RosInterface {
   bool received_explicit_joint_cmd_{false};
   rclcpp::Time last_joint_cmd_time_;
   double gait_phase_{0.0};
+  std::vector<double> neutral_pose_;
+  bool neutral_initialized_{false};
+  double base_height_{1.1};  // spawn height
+  bool pd_active_{false};
+  rclcpp::Time neutral_init_time_;
 };
 
 }  // namespace mujoco
