@@ -41,10 +41,11 @@ MAX_STEP_LIMIT=${MAX_STEP_LIMIT:-0.04}
 RAMP_TIME=${RAMP_TIME:-0.5}   # seconds ramp in and ramp out for multi-joint waves
 DISABLE_SAFETY=${DISABLE_SAFETY:-0}
 
-# Internal previous command state for per-step limiting
-declare -a LAST_POSITIONS
-if (( ${#LAST_POSITIONS[@]} == 0 )); then
+# Internal previous command state for per-step limiting (safe init under set -u)
+if [[ -z "${LAST_POSITIONS_INIT_DONE:-}" ]]; then
+  declare -ag LAST_POSITIONS=()
   for ((i=0;i<JOINT_COUNT;i++)); do LAST_POSITIONS+=(0); done
+  LAST_POSITIONS_INIT_DONE=1
 fi
 
 safety_adjust_array() {
@@ -93,6 +94,9 @@ ZERO_LIST=$(repeat_values 0)
 
 publish_once() {
   local position_csv="$1"
+  if [[ "${VERBOSE:-0}" == "1" ]]; then
+    echo "[PUB] positions=[${position_csv}]"
+  fi
   ros2 topic pub --once "$TOPIC" "$MSG" "{position: [${position_csv}], velocity: [${ZERO_LIST}], feed_forward_torque: [${ZERO_LIST}], torque: [${ZERO_LIST}], stiffness: [${STIFFNESS_LIST}], damping: [${DAMPING_LIST}], parallel_parser_type: 0}" >/dev/null
 }
 
@@ -250,6 +254,16 @@ Modes:
   wave <joint_index> <amplitude> <freq_hz> <duration_s> [rate=50]
   all_wave <amplitude> <freq_hz> <duration_s> [rate=50] [phase_step=0]
     phase_step: per-joint added phase (radians). 0 => all synchronous.
+  arms_wave <amplitude> <freq_hz> <duration_s> [rate=50] [side=both] [per_joint_phase=0] [lr_phase=0]
+    side: left|right|both
+    per_joint_phase: incremental phase per joint within an arm
+    lr_phase: extra phase added to right arm
+  arms_raise <side> <target_angle> <duration_s> [rate=40] [joint_offset=2] [hold_s=0]
+    Smooth S-curve lift of one arm joint (default joint_offset 2 within arm block).
+  arms_scan <side> <target_angle> [duration_s=1.5] [rate=20] [hold_s=0.3]
+    Sequentially raises each arm joint (offset 0..4) to find which lifts the arm.
+  joint_scan <angle> <hold_s> [rate=10] [start=0] [end=23]
+    Pulses each joint index (start..end) to that angle for hold_s seconds.
   travel_wave <amplitude> <freq_hz> <duration_s> [rate=50] [periods=1]
     periods: how many full 2π phase cycles spread across joints (>=1 float).
   multi_wave <amp1> <freq1> <amp2> <freq2> <duration_s> [rate=50] [phase_step=0]
@@ -258,6 +272,12 @@ Modes:
   random_pose <amplitude> <duration_s> [rate=10]              (abrupt; simulation only)
   random_safe <amplitude> <duration_s> [rate=10] [max_step=0.05] [indices=all]
     indices: comma-separated joint indices (e.g. 0,1,2) or 'all'.
+Env overrides:
+  MAX_ABS_LIMIT      Global absolute limit (default 0.2)
+  MAX_STEP_LIMIT     Per-step delta limit (default 0.04)
+  RAMP_TIME          Ramp time for wave modes (default 0.5)
+  ARM_MAX_ABS_LIMIT  If set, overrides MAX_ABS_LIMIT only inside arms_wave / arms_raise
+  VERBOSE=1          Debug prints of generated commands
 EOF
 }
 
@@ -273,6 +293,10 @@ main() {
   random_pose) mode_random_pose "$@" ;;
   random_safe) mode_random_safe "$@" ;;
   all_wave) mode_all_wave "$@" ;;
+  arms_wave) mode_arms_wave "$@" ;;
+  arms_raise) mode_arms_raise "$@" ;;
+  arms_scan) mode_arms_scan "$@" ;;
+  joint_scan) mode_joint_scan "$@" ;;
   travel_wave) mode_travel_wave "$@" ;;
   multi_wave) mode_multi_wave "$@" ;;
   cascade) mode_cascade "$@" ;;
@@ -368,6 +392,10 @@ mode_multi_wave() {
   local steps=$(awk -v d="$duration" -v p="$period" 'BEGIN{print int(d/p)}')
   for ((k=0;k<=steps;k++)); do
     local t=$(awk -v k="$k" -v p="$period" 'BEGIN{print k*p}')
+    local ramp_in=$(awk -v tt="$t" -v rt="$RAMP_TIME" 'BEGIN{ if (tt<rt) print tt/rt; else print 1.0 }')
+    local time_left=$(awk -v d="$duration" -v tt="$t" 'BEGIN{print d-tt}')
+    local ramp_out=$(awk -v tl="$time_left" -v rt="$RAMP_TIME" 'BEGIN{ if (tl<rt) print tl/rt; else print 1.0 }')
+    local ramp_factor=$(awk -v a="$ramp_in" -v b="$ramp_out" 'BEGIN{print (a<b)?a:b}')
     local arr=()
     for ((i=0;i<JOINT_COUNT;i++)); do
       val=$(python3 - <<EOF
@@ -376,16 +404,13 @@ amp1=${amp1}; f1=${freq1}; amp2=${amp2}; f2=${freq2}
 t=${t}; phase_step=${phase_step}; i=${i}
 phase = phase_step*i
 val = amp1*math.sin(2*math.pi*f1*t + phase) + amp2*math.sin(2*math.pi*f2*t + 0.5*phase)
-print(val)
+rf=${ramp_factor}
+print(rf*val)
 EOF
 )
       arr+=("$val")
     done
-    local csv=$(IFS=,; echo "${arr[*]}")
-          local ramp_in=$(awk -v tt="$t" -v rt="$RAMP_TIME" 'BEGIN{ if (tt<rt) print tt/rt; else print 1.0 }')
-          local time_left=$(awk -v d="$duration" -v tt="$t" 'BEGIN{print d-tt}')
-          local ramp_out=$(awk -v tl="$time_left" -v rt="$RAMP_TIME" 'BEGIN{ if (tl<rt) print tl/rt; else print 1.0 }')
-          local ramp_factor=$(awk -v a="$ramp_in" -v b="$ramp_out" 'BEGIN{print (a<b)?a:b}')
+    local csv=$(safety_adjust_array "${arr[@]}")
     publish_once "$csv"
     sleep "$period"
   done
@@ -394,42 +419,199 @@ EOF
 mode_cascade() {
   local amplitude=${1:?amplitude}
   local freq=${2:?freq_hz}
-      rf=${ramp_factor}
-      print(rf*val)
-      EOF
-      )
-            arr+=("$val")
-          done
-          local csv=$(safety_adjust_array "${arr[@]}")
-          publish_once "$csv"
-          sleep "$period"
-        done
-      }
-
-      mode_cascade() {
-        local amplitude=${1:?amplitude}
-        local freq=${2:?freq_hz}
-        local duration=${3:?seconds}
-        local rate=${4:-40}
-        local hold=${5:-0.2}
-        local period=$(awk -v r="$rate" 'BEGIN{print 1.0/r}')
-        local steps=$(awk -v d="$duration" -v p="$period" 'BEGIN{print int(d/p)}')
-        local offset_per_joint=$(awk -v h="$hold" 'BEGIN{print h}')
-        for ((k=0;k<=steps;k++)); do
-          local global_t=$(awk -v k="$k" -v p="$period" 'BEGIN{print k*p}')
-          local arr=()
-          for ((i=0;i<JOINT_COUNT;i++)); do
-            local t_after=$(awk -v gt="$global_t" -v off="$offset_per_joint" -v idx="$i" 'BEGIN{val=gt-off*idx; if(val<0) val=0; print val}')
-            val=$(python3 - <<EOF
-      import math
-      amp=${amplitude}; f=${freq}; t=${t_after}
-      print(amp*math.sin(2*math.pi*f*t) if t>0 else 0.0)
   local duration=${3:?seconds}
   local rate=${4:-40}
   local hold=${5:-0.2}
   local period=$(awk -v r="$rate" 'BEGIN{print 1.0/r}')
-          local csv=$(safety_adjust_array "${arr[@]}")
-  # time offset per joint so they activate sequentially
+  local steps=$(awk -v d="$duration" -v p="$period" 'BEGIN{print int(d/p)}')
   local offset_per_joint=$(awk -v h="$hold" 'BEGIN{print h}')
   for ((k=0;k<=steps;k++)); do
     local global_t=$(awk -v k="$k" -v p="$period" 'BEGIN{print k*p}')
+    local arr=()
+    for ((i=0;i<JOINT_COUNT;i++)); do
+      local t_after=$(awk -v gt="$global_t" -v off="$offset_per_joint" -v idx="$i" 'BEGIN{val=gt-off*idx; if(val<0) val=0; print val}')
+      val=$(python3 - <<EOF
+import math
+amp=${amplitude}; f=${freq}; t=${t_after}
+print(amp*math.sin(2*math.pi*f*t) if t>0 else 0.0)
+EOF
+)
+      arr+=("$val")
+    done
+    local csv=$(safety_adjust_array "${arr[@]}")
+    publish_once "$csv"
+    sleep "$period"
+  done
+}
+
+mode_arms_wave() {
+  local amplitude=${1:?amplitude}
+  local freq=${2:?freq_hz}
+  local duration=${3:?seconds}
+  local rate=${4:-50}
+  local side=${5:-both}
+  local per_joint_phase=${6:-0}
+  local lr_phase=${7:-0}
+  local period=$(awk -v r="$rate" 'BEGIN{print 1.0/r}')
+  local steps=$(awk -v d="$duration" -v p="$period" 'BEGIN{print int(d/p)}')
+  local left_start=13
+  local right_start=18
+  local arm_len=5
+  local saved_MAX_ABS_LIMIT="$MAX_ABS_LIMIT"
+  if [[ -n "${ARM_MAX_ABS_LIMIT:-}" ]]; then MAX_ABS_LIMIT="$ARM_MAX_ABS_LIMIT"; fi
+  for ((k=0;k<=steps;k++)); do
+    local t=$(awk -v k="$k" -v p="$period" 'BEGIN{print k*p}')
+    local ramp_in=$(awk -v tt="$t" -v rt="$RAMP_TIME" 'BEGIN{ if (tt<rt) print tt/rt; else print 1.0 }')
+    local time_left=$(awk -v d="$duration" -v tt="$t" 'BEGIN{print d-tt}')
+    local ramp_out=$(awk -v tl="$time_left" -v rt="$RAMP_TIME" 'BEGIN{ if (tl<rt) print tl/rt; else print 1.0 }')
+    local ramp_factor=$(awk -v a="$ramp_in" -v b="$ramp_out" 'BEGIN{print (a<b)?a:b}')
+    local arr=()
+    for ((i=0;i<JOINT_COUNT;i++)); do arr+=(0); done
+    if [[ "$side" == "left" || "$side" == "both" ]]; then
+      for ((j=0;j<arm_len;j++)); do
+        val=$(python3 - <<EOF
+import math
+amp=${amplitude}; f=${freq}; t=${t}; j=${j}; pjp=${per_joint_phase}; rf=${ramp_factor}
+print(rf*amp*math.sin(2*math.pi*f*t + pjp*j))
+EOF
+)
+        arr[$((left_start+j))]="$val"
+      done
+    fi
+    if [[ "$side" == "right" || "$side" == "both" ]]; then
+      for ((j=0;j<arm_len;j++)); do
+        val=$(python3 - <<EOF
+import math
+amp=${amplitude}; f=${freq}; t=${t}; j=${j}; pjp=${per_joint_phase}; rf=${ramp_factor}; lrp=${lr_phase}
+print(rf*amp*math.sin(2*math.pi*f*t + lrp + pjp*j))
+EOF
+)
+        arr[$((right_start+j))]="$val"
+      done
+    fi
+    local csv=$(safety_adjust_array "${arr[@]}")
+    if [[ "${VERBOSE:-0}" == "1" ]]; then
+      echo "[arms_wave] step=$k t=$t ramp_factor=$ramp_factor side=$side csv=$csv"
+    fi
+    publish_once "$csv"
+    sleep "$period"
+  done
+  MAX_ABS_LIMIT="$saved_MAX_ABS_LIMIT"
+}
+
+mode_arms_raise() {
+  # Args: side target_angle duration_s [rate=40] [joint_offset=2] [hold_s=0]
+  local side=${1:?side}
+  local target=${2:?target_angle}
+  local duration=${3:?seconds}
+  local rate=${4:-40}
+  local joint_offset=${5:-2}
+  local hold=${6:-0}
+  local period=$(awk -v r="$rate" 'BEGIN{print 1.0/r}')
+  local steps=$(awk -v d="$duration" -v p="$period" 'BEGIN{print int(d/p)}')
+  local left_start=13
+  local right_start=18
+  local arm_len=5
+  local saved_MAX_ABS_LIMIT="$MAX_ABS_LIMIT"
+  if [[ -n "${ARM_MAX_ABS_LIMIT:-}" ]]; then MAX_ABS_LIMIT="$ARM_MAX_ABS_LIMIT"; fi
+  for ((k=0;k<=steps;k++)); do
+    local t=$(awk -v k="$k" -v p="$period" 'BEGIN{print k*p}')
+    local tau=$(awk -v tt="$t" -v dur="$duration" 'BEGIN{ if(dur==0){print 1}else if(tt>dur){print 1}else{print tt/dur}}')
+    local s=$(python3 - <<EOF
+u=${tau}
+if u<0: u=0
+if u>1: u=1
+print(10*u**3 - 15*u**4 + 6*u**5)
+EOF
+)
+    local angle=$(awk -v s="$s" -v tgt="$target" 'BEGIN{print s*tgt}')
+    local arr=()
+    for ((i=0;i<JOINT_COUNT;i++)); do arr+=(0); done
+    if [[ "$side" == "left" ]]; then
+      local idx=$((left_start + joint_offset))
+      if (( idx < left_start+arm_len )); then arr[$idx]="$angle"; fi
+    elif [[ "$side" == "right" ]]; then
+      local idx=$((right_start + joint_offset))
+      if (( idx < right_start+arm_len )); then arr[$idx]="$angle"; fi
+    else
+      local lidx=$((left_start + joint_offset))
+      local ridx=$((right_start + joint_offset))
+      if (( lidx < left_start+arm_len )); then arr[$lidx]="$angle"; fi
+      if (( ridx < right_start+arm_len )); then arr[$ridx]="$angle"; fi
+    fi
+    local csv=$(safety_adjust_array "${arr[@]}")
+    if [[ "${VERBOSE:-0}" == "1" ]]; then
+      echo "[arms_raise] step=$k t=$t tau=$tau angle=$angle csv=$csv"
+    fi
+    publish_once "$csv"
+    sleep "$period"
+  done
+  if awk -v h="$hold" 'BEGIN{exit (h>0)?0:1}'; then
+    local hold_steps=$(awk -v h="$hold" -v p="$period" 'BEGIN{print int(h/p)}')
+    local arr=()
+    for ((i=0;i<JOINT_COUNT;i++)); do arr+=(0); done
+    if [[ "$side" == "left" ]]; then
+      local idx=$((left_start + joint_offset))
+      if (( idx < left_start+arm_len )); then arr[$idx]="$target"; fi
+    elif [[ "$side" == "right" ]]; then
+      local idx=$((right_start + joint_offset))
+      if (( idx < right_start+arm_len )); then arr[$idx]="$target"; fi
+    else
+      local lidx=$((left_start + joint_offset))
+      local ridx=$((right_start + joint_offset))
+      if (( lidx < left_start+arm_len )); then arr[$lidx]="$target"; fi
+      if (( ridx < right_start+arm_len )); then arr[$ridx]="$target"; fi
+    fi
+    for ((k=0;k<hold_steps;k++)); do
+      local csv=$(safety_adjust_array "${arr[@]}")
+      publish_once "$csv"
+      sleep "$period"
+    done
+  fi
+  MAX_ABS_LIMIT="$saved_MAX_ABS_LIMIT"
+}
+
+mode_arms_scan() {
+  # Args: side target_angle [duration=1.5] [rate=20] [hold=0.3]
+  local side=${1:?side}
+  local target=${2:?target_angle}
+  local duration=${3:-1.5}
+  local rate=${4:-20}
+  local hold=${5:-0.3}
+  local left_start=13
+  local right_start=18
+  local arm_len=5
+  for ((off=0; off<arm_len; off++)); do
+    echo "[arms_scan] Testing offset $off" >&2
+    ./scripts/joint_command_cli_test.sh arms_raise "$side" "$target" "$duration" "$rate" "$off" "$hold"
+    sleep 0.2
+  done
+}
+
+mode_joint_scan() {
+  local angle=${1:?angle}
+  local hold=${2:?hold_s}
+  local rate=${3:-10}
+  local start_idx=${4:-0}
+  local end_idx=${5:-$((JOINT_COUNT-1))}
+  local period=$(awk -v r="$rate" 'BEGIN{print 1.0/r}')
+  echo "[joint_scan] scanning joints $start_idx..$end_idx to angle $angle (hold $hold s)" >&2
+  for ((j=start_idx; j<=end_idx; j++)); do
+    echo "[joint_scan] joint $j" >&2
+    local steps=$(awk -v h="$hold" -v p="$period" 'BEGIN{print int(h/p)}')
+    for ((s=0;s<steps;s++)); do
+      local arr=()
+      for ((i=0;i<JOINT_COUNT;i++)); do arr+=(0); done
+      arr[$j]="$angle"
+      local csv=$(safety_adjust_array "${arr[@]}")
+      publish_once "$csv"
+      sleep "$period"
+    done
+    # return to zero once
+    publish_once "$ZERO_LIST"
+    sleep 0.2
+  done
+}
+
+# Invoke dispatcher now that all functions are defined
+main "$@"

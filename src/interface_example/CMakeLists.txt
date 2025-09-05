@@ -91,6 +91,7 @@ install(PROGRAMS
   scripts/idle_animation_example.py
   scripts/stand_up_once.py
   scripts/arm_up_once.py
+  scripts/arm_raise_smooth.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -127,3 +128,6 @@ install(PROGRAMS scripts/stand_up_once.py
 install(PROGRAMS scripts/arm_up_once.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME arm_up_once)
+install(PROGRAMS scripts/arm_raise_smooth.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME arm_raise_smooth)
