@@ -45,6 +45,7 @@ Offline deploy? See: `docs/OFFLINE_DEPLOYMENT.md`.
 | `docs/SAFETY.md` | Safety checklist & FSM usage |
 | `docs/TROUBLESHOOTING.md` | Common issues & fixes |
 | `docs/OFFLINE_DEPLOYMENT.md` | Air‑gapped packaging & install |
+| `docs/CHANGELOG.md` | Versioned changes & Unreleased items |
 | `src/interface_protocol/README.md` | ROS2 interface topics & message schema |
 | `docs/CONTRIBUTING.md` | Contribution & branch workflow |
 
@@ -52,6 +53,14 @@ Offline deploy? See: `docs/OFFLINE_DEPLOYMENT.md`.
 * `interface_protocol`: Message & service definitions + shared protocol README.
 * `interface_example`: C++ & Python examples, RL basic example, config & models.
 * `simulation/mujoco`: MuJoCo integration + launcher.
+### Simulator Parameters
+Launch examples:
+```bash
+ros2 launch mujoco_simulator mujoco_simulator.launch.py base_height:=1.1
+```
+Parameters (current):
+* `base_height` – spawn floating base z (manual until contact alignment improves).
+
 * `third_party`: Vendor libs bootstrap script.
 
 ## Finite State Machine (Modes)
