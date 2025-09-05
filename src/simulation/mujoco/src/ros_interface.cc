@@ -9,6 +9,8 @@
 #include <rclcpp/logging.hpp>
 #include <string>
 
+#include <mujoco/mujoco.h>
+
 #include "config_loader.h"
 #include "rclcpp/rclcpp.hpp"
 
@@ -234,6 +236,8 @@ void RosInterface::InitializeNeutralStandPose() {
   }
 
   // (simplified) no ground alignment logic
+
+  // ground alignment removed (reverted)
 }
 
 

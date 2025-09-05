@@ -89,6 +89,8 @@ install(PROGRAMS
   scripts/arm_control_example.py
   scripts/arm_wave_example.py
   scripts/idle_animation_example.py
+  scripts/stand_up_once.py
+  scripts/arm_up_once.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -119,3 +121,9 @@ install(PROGRAMS scripts/arm_wave_example.py
 install(PROGRAMS scripts/idle_animation_example.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME idle_animation_example)
+install(PROGRAMS scripts/stand_up_once.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME stand_up_once)
+install(PROGRAMS scripts/arm_up_once.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME arm_up_once)
