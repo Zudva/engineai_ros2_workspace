@@ -1,0 +1,21 @@
+# index,min,max,name,comment
+0,-2.50,2.50,base_yaw,placeholder
+1,-1.20,1.20,base_pitch,placeholder
+2,-1.50,1.50,base_roll,placeholder
+3,0.00,0.45,torso_lift,placeholder
+4,-2.00,2.00,shoulder_left_pitch,placeholder
+5,-1.90,1.90,shoulder_left_roll,placeholder
+6,-2.80,2.80,shoulder_left_yaw,placeholder
+7,-2.30,2.30,elbow_left_pitch,placeholder
+8,-2.00,2.00,wrist_left_pitch,placeholder
+9,-2.50,2.50,wrist_left_roll,placeholder
+10,-2.80,2.80,wrist_left_yaw,placeholder
+11,-2.00,2.00,shoulder_right_pitch,placeholder
+12,-1.90,1.90,shoulder_right_roll,placeholder
+13,-2.80,2.80,shoulder_right_yaw,placeholder
+14,-2.30,2.30,elbow_right_pitch,placeholder
+15,-2.00,2.00,wrist_right_pitch,placeholder
+16,-2.50,2.50,wrist_right_roll,placeholder
+17,-2.80,2.80,wrist_right_yaw,placeholder
+18,0.00,0.04,gripper_finger_left,placeholder
+19,0.00,0.04,gripper_finger_right,placeholder
