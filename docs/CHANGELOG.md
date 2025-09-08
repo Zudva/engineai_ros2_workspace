@@ -12,6 +12,14 @@ All notable changes to this workspace will be documented here. The format loosel
 - Added basic neutral pose construction from `joint_test.yaml` targets.
 - Added `base_height` parameter & removed experimental auto ground alignment after reverting due to mesh/geom offset.
 - Added `idle_animation_example` installation & parameters (amplitude, frequency, indices autodetect).
+- Joint command CLI test tool (`scripts/joint_command_cli_test.sh`) greatly expanded:
+	* Modes added: `arms_wave`, `arms_raise` (S-curve profile), `arms_scan`, `joint_scan`.
+	* Existing multi-joint modes: `all_wave`, `travel_wave`, `multi_wave`, `cascade`, `random_safe` refined & ramped.
+	* Safety system: global amplitude clamp (`MAX_ABS_LIMIT`), per-step delta clamp (`MAX_STEP_LIMIT`), optional ramp (`RAMP_TIME`), selective override for arms (`ARM_MAX_ABS_LIMIT`), disable flag (`DISABLE_SAFETY`).
+	* Verbose debug (`VERBOSE=1`) and structured array safety adjustment function.
+	* Scanning utilities to quickly map physical joint indices (useful for hardware calibration).
+- Added smooth arm raise script & wave patterns integrated in docs (pending dedicated motion doc).
+- Added environment-variable driven arm motion limits separation.
 
 ## [0.1.0] - 2025-09-05
 ### Added
