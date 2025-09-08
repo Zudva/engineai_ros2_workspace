@@ -347,6 +347,8 @@ Modes:
     Smooth S-curve lift of one arm joint (default joint_offset 2 within arm block).
   arms_scan <side> <target_angle> [duration_s=1.5] [rate=20] [hold_s=0.3]
     Sequentially raises each arm joint (offset 0..4) to find which lifts the arm.
+  arms_info
+    Print current arm detection: LEFT_ARM_START, RIGHT_ARM_START, ARM_LEN (no motion).
   joint_scan <angle> <hold_s> [rate=10] [start=0] [end=23]
     Pulses each joint index (start..end) to that angle for hold_s seconds.
   travel_wave <amplitude> <freq_hz> <duration_s> [rate=50] [periods=1]
@@ -382,6 +384,7 @@ main() {
   arms_wave) mode_arms_wave "$@" ;;
   arms_raise) mode_arms_raise "$@" ;;
   arms_scan) mode_arms_scan "$@" ;;
+  arms_info) mode_arms_info "$@" ;;
   joint_scan) mode_joint_scan "$@" ;;
   travel_wave) mode_travel_wave "$@" ;;
   multi_wave) mode_multi_wave "$@" ;;
@@ -672,6 +675,19 @@ mode_arms_scan() {
     ./scripts/joint_command_cli_test.sh arms_raise "$side" "$target" "$duration" "$rate" "$off" "$hold"
     sleep 0.2
   done
+}
+
+mode_arms_info() {
+  echo "LEFT_ARM_START=$LEFT_ARM_START" >&2
+  echo "RIGHT_ARM_START=$RIGHT_ARM_START" >&2
+  echo "ARM_LEN=$ARM_LEN" >&2
+  echo "AUTO_DETECT_ARMS=$AUTO_DETECT_ARMS" >&2
+  # Optionally show snippet of joint_state names for confirmation
+  if line=$(timeout 2s ros2 topic echo -n 1 /hardware/joint_state 2>/dev/null | grep '^name:' ); then
+    echo "joint_state names: $line" >&2
+  else
+    echo "(joint_state names not available now)" >&2
+  fi
 }
 
 mode_joint_scan() {
