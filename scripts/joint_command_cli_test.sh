@@ -35,6 +35,12 @@ DAMPING_VAL=5
 TOPIC="/hardware/joint_command"
 MSG="interface_protocol/msg/JointCommand"
 
+# Arm indexing (override via env to match actual joint ordering)
+# Defaults were previously hard-coded (left_start=13,right_start=18,arm_len=5) and may not match your robot.
+LEFT_ARM_START=${LEFT_ARM_START:-13}
+RIGHT_ARM_START=${RIGHT_ARM_START:-18}
+ARM_LEN=${ARM_LEN:-5}
+
 # Safety tunables (can override via environment)
 MAX_ABS_LIMIT=${MAX_ABS_LIMIT:-0.2}
 MAX_STEP_LIMIT=${MAX_STEP_LIMIT:-0.04}
@@ -454,9 +460,9 @@ mode_arms_wave() {
   local lr_phase=${7:-0}
   local period=$(awk -v r="$rate" 'BEGIN{print 1.0/r}')
   local steps=$(awk -v d="$duration" -v p="$period" 'BEGIN{print int(d/p)}')
-  local left_start=13
-  local right_start=18
-  local arm_len=5
+  local left_start=$LEFT_ARM_START
+  local right_start=$RIGHT_ARM_START
+  local arm_len=$ARM_LEN
   local saved_MAX_ABS_LIMIT="$MAX_ABS_LIMIT"
   if [[ -n "${ARM_MAX_ABS_LIMIT:-}" ]]; then MAX_ABS_LIMIT="$ARM_MAX_ABS_LIMIT"; fi
   for ((k=0;k<=steps;k++)); do
@@ -509,9 +515,9 @@ mode_arms_raise() {
   local hold=${6:-0}
   local period=$(awk -v r="$rate" 'BEGIN{print 1.0/r}')
   local steps=$(awk -v d="$duration" -v p="$period" 'BEGIN{print int(d/p)}')
-  local left_start=13
-  local right_start=18
-  local arm_len=5
+  local left_start=$LEFT_ARM_START
+  local right_start=$RIGHT_ARM_START
+  local arm_len=$ARM_LEN
   local saved_MAX_ABS_LIMIT="$MAX_ABS_LIMIT"
   if [[ -n "${ARM_MAX_ABS_LIMIT:-}" ]]; then MAX_ABS_LIMIT="$ARM_MAX_ABS_LIMIT"; fi
   for ((k=0;k<=steps;k++)); do
@@ -578,9 +584,9 @@ mode_arms_scan() {
   local duration=${3:-1.5}
   local rate=${4:-20}
   local hold=${5:-0.3}
-  local left_start=13
-  local right_start=18
-  local arm_len=5
+  local left_start=$LEFT_ARM_START
+  local right_start=$RIGHT_ARM_START
+  local arm_len=$ARM_LEN
   for ((off=0; off<arm_len; off++)); do
     echo "[arms_scan] Testing offset $off" >&2
     ./scripts/joint_command_cli_test.sh arms_raise "$side" "$target" "$duration" "$rate" "$off" "$hold"
