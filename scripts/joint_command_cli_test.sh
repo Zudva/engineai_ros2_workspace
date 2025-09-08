@@ -40,6 +40,85 @@ MSG="interface_protocol/msg/JointCommand"
 LEFT_ARM_START=${LEFT_ARM_START:-13}
 RIGHT_ARM_START=${RIGHT_ARM_START:-18}
 ARM_LEN=${ARM_LEN:-5}
+AUTO_DETECT_ARMS=${AUTO_DETECT_ARMS:-1}  # try to infer arm start indices & length from joint_state names
+
+detect_arm_indices() {
+  [[ "$AUTO_DETECT_ARMS" == "1" ]] || return 0
+  # Only attempt if ros2 is up and topic responds quickly
+  local line
+  line=$(timeout 2s ros2 topic echo -n 1 /hardware/joint_state 2>/dev/null | grep '^name:' || true)
+  if [[ -z "$line" ]]; then
+    [[ "${VERBOSE:-0}" == "1" ]] && echo "[auto-detect] joint_state names not available (skip)" >&2
+    return 0
+  fi
+  # Extract names list inside brackets
+  line=${line#name:}
+  line=${line#*[}
+  line=${line%]*}
+  IFS=',' read -r -a NAMES <<< "$line"
+  local idx=0
+  local -a left_candidates=()
+  local -a right_candidates=()
+  for raw in "${NAMES[@]}"; do
+    # trim spaces & quotes
+    local n=${raw//\"/}
+    n=$(echo "$n" | sed -E 's/^ *//;s/ *$//')
+    if echo "$n" | grep -qi 'left'; then
+      if echo "$n" | grep -Eqi 'shoulder|elbow|wrist|gripper'; then
+        left_candidates+=("$idx")
+      fi
+    fi
+    if echo "$n" | grep -qi 'right'; then
+      if echo "$n" | grep -Eqi 'shoulder|elbow|wrist|gripper'; then
+        right_candidates+=("$idx")
+      fi
+    fi
+    ((idx++))
+  done
+  # Derive contiguous block start & length helper
+  contiguous_block() {
+    local -a arr=("$@")
+    local best_start=-1 best_len=0
+    local current_start=-1 current_prev=-1000 current_len=0
+    for v in "${arr[@]}"; do
+      if (( current_start == -1 )); then
+        current_start=$v; current_prev=$v; current_len=1
+      elif (( v == current_prev + 1 )); then
+        current_prev=$v; ((current_len++))
+      else
+        if (( current_len > best_len )); then best_len=$current_len; best_start=$current_start; fi
+        current_start=$v; current_prev=$v; current_len=1
+      fi
+    done
+    if (( current_len > best_len )); then best_len=$current_len; best_start=$current_start; fi
+    echo "$best_start $best_len"
+  }
+  # Only override if user did not explicitly set (detect default sentinel values OR user allowed)
+  if (( ${#left_candidates[@]} )); then
+    read -r lstart llen < <(contiguous_block "${left_candidates[@]}")
+    if [[ -n "$lstart" && $lstart != -1 ]]; then
+      if [[ "${LEFT_ARM_START_OVERRIDE:-}" != "1" ]]; then
+        LEFT_ARM_START=$lstart
+        [[ $llen -gt 1 ]] && ARM_LEN=$llen
+        [[ "${VERBOSE:-0}" == "1" ]] && echo "[auto-detect] LEFT_ARM_START=$LEFT_ARM_START ARM_LEN=$ARM_LEN" >&2
+      fi
+    fi
+  fi
+  if (( ${#right_candidates[@]} )); then
+    read -r rstart rlen < <(contiguous_block "${right_candidates[@]}")
+    if [[ -n "$rstart" && $rstart != -1 ]]; then
+      if [[ "${RIGHT_ARM_START_OVERRIDE:-}" != "1" ]]; then
+        RIGHT_ARM_START=$rstart
+        # If both arms same length keep, else choose min shared length
+        if (( rlen < ARM_LEN )); then ARM_LEN=$rlen; fi
+        [[ "${VERBOSE:-0}" == "1" ]] && echo "[auto-detect] RIGHT_ARM_START=$RIGHT_ARM_START (ARM_LEN now $ARM_LEN)" >&2
+      fi
+    fi
+  fi
+}
+
+# Perform detection early (non-fatal)
+detect_arm_indices
 
 # Safety tunables (can override via environment)
 MAX_ABS_LIMIT=${MAX_ABS_LIMIT:-0.2}
@@ -283,6 +362,7 @@ Env overrides:
   MAX_STEP_LIMIT     Per-step delta limit (default 0.04)
   RAMP_TIME          Ramp time for wave modes (default 0.5)
   ARM_MAX_ABS_LIMIT  If set, overrides MAX_ABS_LIMIT only inside arms_wave / arms_raise
+  AUTO_DETECT_ARMS   (1 default) Try infer LEFT_ARM_START/RIGHT_ARM_START/ARM_LEN from joint_state names
   VERBOSE=1          Debug prints of generated commands
 EOF
 }
