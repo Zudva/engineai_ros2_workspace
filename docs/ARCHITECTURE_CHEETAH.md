@@ -130,6 +130,22 @@ ros2 launch interface_example rl_basic_example.launch.py
 
 Для симуляции запустите узел адаптера MuJoCo с вашим `cheetah.yaml` (имя исполняемого узла зависит от реализации в пакете `simulation/mujoco`).
 
+### Проверка конфигурации (валидатор)
+
+```zsh
+# Проверка, что YAML и размеры совпадают с ожиданиями узла
+python3 scripts/validate_rl_config.py src/interface_example/config/cheetah/rl_basic/basic
+```
+
+Ожидаемый вывод: подсказка по ожидаемому входу сети и сообщение `OK` либо явные ошибки/предупреждения по несоответствию размерностей.
+
+### Где лежит шаблон для «Гепарда»
+
+- RL‑конфиг: `src/interface_example/config/cheetah/rl_basic/basic/rl_basic_param.yaml`
+- Политика (положите сюда свой `.mnn`): `src/interface_example/config/cheetah/rl_basic/basic/policies/`
+- Сим‑конфиг: `src/simulation/mujoco/assets/config/cheetah.yaml`
+- Ресурсы модели: `src/simulation/mujoco/assets/resource/robot/cheetah/{urdf,xml}`
+
 ## Диагностика
 
 - Быстрая проверка связности офлайн‑пакетов: `scripts/offline_verify.sh` (проверяет связность `rl_basic_example`).
@@ -146,3 +162,67 @@ ros2 launch interface_example rl_basic_example.launch.py
 
 —
 Документ отражает текущую структуру workspace и источники сущностей для модели «Гепард». По запросу можно сгенерировать шаблоны `config/cheetah` и `cheetah.yaml`.
+
+## Приложение A: Трассируемость сущностей → файлы
+
+- Узел RL: `src/interface_example/src/rl_basic_example.cc` → создаёт/публикует `JointCommand`.
+- Подписки/паблишер: `src/interface_example/src/components/message_handler.hpp|.cc` → инициализация QoS и топиков.
+- Параметры RL: `src/interface_example/src/parameter/rl_basic_param.*` → загрузка YAML, приведение типов/векторов.
+- Политика MNN: `src/interface_example/src/math/mnn_model.*` → загрузка и инференс.
+- Сообщения/сервисы: `src/interface_protocol/msg/*.msg`, `src/interface_protocol/srv/*.srv`.
+- Симуляция: `src/simulation/mujoco/src/config_loader.cc`, `src/simulation/mujoco/assets/*`.
+
+## Приложение B: QoS и частоты (сводно)
+
+- В `MessageHandler` используется `QoS(3)`, `best_effort()`, `durability_volatile()` для высокочастотных сенсорных потоков.
+- Рекомендация: не поднимать QoS до reliable для потоков >500 Гц без крайней необходимости.
+
+## Приложение C: Контекст FSM / режимы
+
+- Узел ждёт `MotionState.current_motion_task == "joint_bridge"` перед началом управления.
+- Источник: топик `/motion/motion_state`.
+
+## Приложение D: Чек‑лист валидации RL‑конфига
+
+- Совпадает ли длина `active_joint_idx` с размером действия модели (выход MNN)?
+- `num_observations * num_include_obs_steps + num_clock_signal + num_commands` равно входу модели?
+- Имеют ли `default_joint_q / joint_kp / joint_kd / action_scale` корректные группы и суммарные длины?
+- `control_dt` согласован с целевым циклом и стабильностью?
+- Масштабы/клиппинг (`observation_scale`, `observation_clip`, `action_clip`) не обрезают полезный сигнал?
+
+## Приложение E: Классы (Mermaid)
+
+```mermaid
+classDiagram
+  class MessageHandler{
+    -rclcpp::Node::SharedPtr node_
+    +Initialize()
+    +GetLatestJointState()
+    +GetLatestImu()
+    +GetLatestGamepad()
+    +GetLatestMotionState()
+    +PublishJointCommand(cmd)
+  }
+  class RlBasicParam{
+    +policy_file: string
+    +num_observations: int
+    +active_joint_names: [string]
+    +active_joint_idx: [int]
+    +default_joint_q: [VectorXd]
+    +joint_kp/joint_kd: [VectorXd]
+    +action_scale: [VectorXd]
+    +control_dt: double
+  }
+  class MnnModel{
+    +Inference(MatrixXf): VectorXf
+  }
+  class RlBasicRunner{
+    -MessageHandler
+    -RlBasicParam
+    -MnnModel
+    +Initialize()
+  }
+  RlBasicRunner --> MessageHandler
+  RlBasicRunner --> RlBasicParam
+  RlBasicRunner --> MnnModel
+```

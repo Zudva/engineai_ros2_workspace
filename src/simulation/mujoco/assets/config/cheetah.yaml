@@ -1,0 +1,17 @@
+# MuJoCo adapter configuration for Cheetah model (template)
+# Align topics with interface_protocol/README.md and MessageHandler
+
+urdf: serial_cheetah.urdf
+xml: cheetah.xml
+
+model_param:
+  num_total_joints: 12   # adjust to full model DOF (not only active joints)
+  num_contacts: 4
+  num_single_contact_dimensions: 2
+
+sensor:
+  imu_topic: /hardware/imu_info
+
+actuator:
+  joint_state_topic: /hardware/joint_state
+  joint_command_topic: /hardware/joint_command

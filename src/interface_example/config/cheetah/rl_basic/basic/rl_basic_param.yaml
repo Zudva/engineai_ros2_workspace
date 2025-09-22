@@ -1,0 +1,70 @@
+# Template RL config for Cheetah model
+# Adjust values to your robot DOF and policy IO sizes
+
+policy_file: "policies/cheetah_policy.mnn"
+
+# network IO sizes
+num_observations: 42   # per time step
+num_commands: 3        # e.g. vx, vy, yaw
+num_clock_signal: 2    # sin/cos phase
+num_include_obs_steps: 15
+
+# joints controlled by the policy (indexes into full robot joint vector)
+active_joint_names: [
+  # Example: replace with your joint names in correct order
+  "LF_HIP_PITCH", "LF_HIP_ROLL", "LF_HIP_YAW", "LF_KNEE_PITCH", "LF_ANKLE_PITCH", "LF_ANKLE_ROLL",
+  "RF_HIP_PITCH", "RF_HIP_ROLL", "RF_HIP_YAW", "RF_KNEE_PITCH", "RF_ANKLE_PITCH", "RF_ANKLE_ROLL"
+]
+active_joint_idx: [0,1,2,3,4,5,6,7,8,9,10,11]
+
+mix: false
+
+# observation scales/clipping
+observation_scale_linear_vel: 2.0
+observation_scale_angular_vel: 1.0
+observation_scale_dof_pos: 1.0
+observation_scale_dof_vel: 0.05
+observation_scale_quat: 1.0
+observation_clip: 100.0
+
+# gait params
+cycle_time: 0.8
+still_ratio: 0.0
+
+# action/output clipping
+action_clip: 100.0
+
+# PD and defaults grouped per limb/group to match your robot
+# Each sub-array contributes to total DOF; lengths must match across default_joint_q, joint_kp, joint_kd
+# Example below assumes 12 DOF (2x legs with 6 dof each)
+
+default_joint_q:
+  - [-0.24, 0.0, 0.0, 0.48, -0.24, 0.0]
+  - [-0.24, 0.0, 0.0, 0.48, -0.24, 0.0]
+
+joint_kp:
+  - [70, 50, 50, 70, 20, 20]
+  - [70, 50, 50, 70, 20, 20]
+
+joint_kd:
+  - [7.0, 5.0, 5.0, 7.0, 0.2, 0.2]
+  - [7.0, 5.0, 5.0, 7.0, 0.2, 0.2]
+
+# scale applied to policy actions per DOF (length must equal len(active_joint_idx))
+action_scale:
+  - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+  - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+control_dt: 0.01
+
+# sim-to-real tuning
+enable_remote_command_lpf: false
+remote_command_sampling_frequency: 50.0
+remote_command_cut_off_frequency: 0.1
+command_scale: [1.0, 0.7, 0.8]
+command_bias: [0.0, 0.0, 0.0]
+linear_vel_delta_bias: 0.001
+angular_vel_delta_bias: 0.001
+imu_install_delta_bias: 0.001
+imu_install_bias: [0,0.015,0]
+transition_time: 0.5
